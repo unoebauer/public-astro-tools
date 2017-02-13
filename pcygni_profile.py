@@ -14,7 +14,7 @@ import astropy.units as units
 import astropy.constants as csts
 
 
-class pcygni_calculator(object):
+class PcygniCalculator(object):
     """
     Calculator for P-Cygni line profiles emerging from homologously expanding
     supernova ejecta flows using the Elementary Supernova model and
@@ -598,10 +598,10 @@ class pcygni_calculator(object):
 def example():
     """a simple example illustrating the use of the line profile calculator"""
 
-    prof_calc = pcygni_calculator(t=3000 * units.s, vmax=0.01 * csts.c,
-                                  vphot=0.001 * csts.c, tauref=1, vref=5e7 *
-                                  units.cm/units.s, ve=5e7 * units.cm/units.s,
-                                  lam0=1215.7 * units.AA)
+    prof_calc = PcygniCalculator(t=3000 * units.s, vmax=0.01 * csts.c,
+                                 vphot=0.001 * csts.c, tauref=1, vref=5e7 *
+                                 units.cm/units.s, ve=5e7 * units.cm/units.s,
+                                 lam0=1215.7 * units.AA)
 
     prof_calc.show_line_profile(npoints=100)
     plt.show()
