@@ -60,6 +60,14 @@ class PcygniCalculator(object):
             (defautl 5e7 cm/s)
         lam0 : scalar astropy.units.Quantity
             rest frame wavelength of the line transition (default 1215.7 A)
+        vdet_min : None or scalar astropy.units.Quantity
+            lower/inner location of the line formation region; enables
+            detachment of line formation region; if None, will be set to vphot
+            (default None)
+        vdet_max : None or scalar astropy.units.Quantity
+            upper/outer location of the line formation region; enables
+            detachment of line formation region; if None, will be set to vmax
+            (default None)
         """
 
         # ensure that the calculator works with the correct units
@@ -132,10 +140,12 @@ class PcygniCalculator(object):
 
     @property
     def vdet_min(self):
+        """inner location of line-formation region in cm/s"""
         return self._vdet_min
 
     @property
     def vdet_max(self):
+        """outer location of line-formation region in cm/s"""
         return self._vdet_max
 
     @property
