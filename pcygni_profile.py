@@ -465,7 +465,7 @@ class PcygniCalculator(object):
         for nui in nu:
             Fnu.append(self._calc_line_flux(nui, mode=mode))
 
-        return nu, np.array(Fnu)
+        return nu * units.Hz, np.array(Fnu)
 
     def calc_profile_Fnu(self, npoints=100, mode="both"):
         """Calculate normalized line profile in terms of F_nu
@@ -519,9 +519,11 @@ class PcygniCalculator(object):
 
         nu, Fnu = self._calc_line_profile_base(self.nu_min, self.nu_max,
                                                npoints=npoints, mode=mode)
-        lam = (csts.c.cgs.value / nu)[::-1]
-        cont = Fnu[0] * np.ones(len(Fnu)) * nu**2 / csts.c.cgs.value
-        F_lambda_normed = (Fnu * nu**2 / csts.c.cgs.value / cont)[::-1]
+        lam = nu.to("AA", equivalencies=units.spectral())[::-1]
+        cont = (Fnu[0] * np.ones(len(Fnu)) * nu.to("Hz").value**2 /
+                csts.c.cgs.value)
+        F_lambda_normed = (Fnu * nu.to("Hz").value**2 /
+                           csts.c.cgs.value / cont)[::-1]
 
         return lam, F_lambda_normed
 
@@ -554,13 +556,14 @@ class PcygniCalculator(object):
 
         if vs_nu:
             x, y = self.calc_profile_Fnu(npoints=npoints, mode="both")
+            x = x.to("Hz")
             if include_abs:
                 yabs = self.calc_profile_Fnu(npoints=npoints, mode="abs")[-1]
             if include_emit:
                 yemit = self.calc_profile_Fnu(npoints=npoints, mode="emit")[-1]
         else:
             x, y = self.calc_profile_Flam(npoints=npoints, mode="both")
-            x = x * 1e8
+            x = x.to("AA")
             if include_abs:
                 yabs = self.calc_profile_Flam(npoints=npoints, mode="abs")[-1]
             if include_emit:
@@ -590,7 +593,7 @@ class PcygniCalculator(object):
             ax.set_xlabel(r"$\lambda$ [$\AA$]")
             ax.set_ylabel(r"$F_{\lambda}/F_{\lambda}^{\mathrm{phot}}$")
 
-        ax.set_xlim([np.min(x), np.max(x)])
+        ax.set_xlim([np.min(x.value), np.max(x.value)])
 
         return fig
 
