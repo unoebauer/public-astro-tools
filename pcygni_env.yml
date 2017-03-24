@@ -1,0 +1,11 @@
+name: pcygni
+dependencies:
+- python=2.7
+- numpy
+- scipy
+- matplotlib
+- astropy
+
+# jupyter requirements
+- jupyter
+
