@@ -33,7 +33,8 @@ class PcygniCalculator(object):
     """
     def __init__(self, t=3000 * units.s, vmax=0.01 * csts.c,
                  vphot=0.001 * csts.c, tauref=1, vref=5e7 * units.cm/units.s,
-                 ve=5e7 * units.cm/units.s, lam0=1215.7 * units.AA):
+                 ve=5e7 * units.cm/units.s, lam0=1215.7 * units.AA,
+                 vdet_min=None, vdet_max=None):
         """
         Parameters
         ----------
@@ -90,6 +91,18 @@ class PcygniCalculator(object):
         self._tauref = tauref
         self._Ip = 1
 
+        if vdet_min is None:
+            vdet_min = self.vphot
+        else:
+            vdet_min = vdet_min.to("cm/s").value
+        if vdet_max is None:
+            vdet_max = self.vmax
+        else:
+            vdet_max = vdet_max.to("cm/s").value
+
+        self._vdet_min = vdet_min
+        self._vdet_max = vdet_max
+
     # Using properties allows the parameters to be crudely "hidden" from the
     # user; thus he is less likely to change them after initialization
     @property
@@ -116,6 +129,14 @@ class PcygniCalculator(object):
     def vref(self):
         """reference velocity in cm/s"""
         return self._vref
+
+    @property
+    def vdet_min(self):
+        return self._vdet_min
+
+    @property
+    def vdet_max(self):
+        return self._vdet_max
 
     @property
     def rmax(self):
@@ -268,7 +289,10 @@ class PcygniCalculator(object):
 
         v = r / self.t
 
-        return self.tauref * np.exp((self.vref - v) / self.ve)
+        if v >= self.vdet_min and v <= self.vdet_max:
+            return self.tauref * np.exp((self.vref - v) / self.ve)
+        else:
+            return 1e-20
 
     def _S(self, p, z, mode="both"):
         """
