@@ -41,6 +41,10 @@ class shock_base(object):
             adiabatic index (default 5/3)
         """
 
+        self.v0 = M0
+        self.rho0 = 1.
+        self.T0 = 1.
+
         self.P0 = P0
         self.M0 = M0
         self.gamma = gamma
@@ -49,7 +53,13 @@ class shock_base(object):
         self.check_shock_entropy_condition()
 
     def check_shock_entropy_condition(self):
-        """check whether initial setup satisfies the shock entropy condition"""
+        """Check whether initial setup satisfies the shock entropy condition
+
+        Raises
+        ------
+        ValueError
+            if entropy condition is violated
+        """
 
         # radiation modified sound speed; LR07 Eq (11)
         a0star = np.sqrt(1. + 4. / 9. * self.P0 * (self.gamma - 1.) *
@@ -62,7 +72,17 @@ class shock_base(object):
             raise ValueError("Violation of Entropy Condition")
 
     def calculate_shock_jump(self):
-        """Calculate overall shock jump"""
+        """Calculate overall shock jump
+
+        Returns
+        -------
+        rho1 : float
+            upstream non-dimensional density
+        v1 : float
+            upstream non-dimensional velocity
+        T1 : float
+            upstream non-dimensional temperature
+        """
 
         # helper functions used in Eq. (12) of LR07
         def f1(T):
@@ -98,3 +118,65 @@ class shock_base(object):
         self.rho1 = res[0]
         self.T1 = res[1]
         self.v1 = self.M0 / self.rho1
+
+
+class eqdiff_shock_calculator(shock_base):
+    def __init__(self, M0, P0, kappa, gamma=5./3.):
+        super(eqdiff_shock_calculator, self).__init__(M0, P0, kappa,
+                                                      gamma=gamma)
+        self.calculate_shock_jump()
+
+    def precursor_region(self, xpr):
+
+        def m(T):
+            return (0.5 * (self.gamma * self.M0**2 + 1.) +
+                    self.gamma * self.P0 / 6. * (1. - T**4))
+
+        def rho(T):
+            return (m(T) - np.sqrt(m(T)**2 - self.gamma * T * self.M0**2)) / T
+
+        def f3(dens, T):
+            # Note: Missprint in Lowrie & Rauenzahn 2007, eq. 24:
+            # rho has to be replaced by 1!
+            return (6. * dens**2 * (T - 1.) / (self.gamma - 1.) +
+                    3. * (1. - dens**2) * self.M0**2 +
+                    8. * self.P0 * (T**4 - 1) * dens)
+
+        def func(T, x):
+
+            dens = rho(T)
+            return self.M0 * f3(dens, T) / (24. * self.kappa * dens**2 * T**3)
+
+        Tpr = scipy.integrate.odeint(func, self.T1, xpr)
+        rhopr = rho(Tpr)
+        vpr = self.M0 / rhopr
+
+        return xpr, rhopr, Tpr, vpr
+
+    def sample_shock(self, xmin=-0.25, xmax=0.25, N=2000):
+
+        xpr = np.linspace(0, xmin, N)
+        xrel = np.linspace(0, xmax, 2)
+
+        xpr, rhopr, Tpr, vpr = self.precursor_region(xpr)
+
+        Mpr = vpr[0] / np.sqrt(Tpr[0])
+        if Mpr > 1.:
+            rhos = (rhopr[0] * (self.gamma + 1.) * Mpr**2 /
+                    (2. + (self.gamma - 1.) * Mpr**2))
+            vs = self.M0 / rhos
+            Ts = (Tpr[0] * (1. - self.gamma + 2. * self.gamma * Mpr**2) *
+                  (2. + (self.gamma - 1.) * Mpr**2) /
+                  ((self.gamma + 1.)**2 * Mpr**2))
+        else:
+            rhos = None
+            vs = None
+            Ts = None
+
+        x = np.append(xpr[::-1], xrel)
+        rho = np.append(rhopr[::-1], np.ones(2) * self.rho1)
+        T = np.append(Tpr[::-1], np.ones(2) * self.T1)
+        v = np.append(vpr[::-1], np.ones(2) * self.v1)
+        M = v / np.sqrt(T)
+
+        return x, v, M, rho, T, rhos, Ts, vs
