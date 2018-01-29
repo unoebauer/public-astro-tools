@@ -243,3 +243,291 @@ class eqdiff_shock_calculator(shock_base):
         shock = result(x=x, rho=rho, T=T, v=v, M=M)
 
         return shock
+
+
+class noneqdiff_shock_calculator(shock_base):
+
+    def __init__(self, M0, P0, kappa, sigma, gamma=5./3.):
+        super(noneqdiff_shock_calculator, self).__init__(M0, P0, kappa * P0,
+                                                         gamma=gamma)
+        self.sigma = sigma
+        self.kappa = kappa
+
+        # epsilon used in LE08, Eqs. (42), (43) and (44)
+        self.eps = 1e-6
+
+        # epsilon use in steps 2 and 3 of the LE08 solution strategy
+        self.epsasp = 1e-3
+
+        # LE08 Eqs. (16) and (18)
+        self.Cp = 1. / (self.gamma - 1.)
+        self.Km = 3. * (self.gamma * self.M0**2 + 1.) + self.gamma * self.P0
+
+    def dthetadx(self, v, rho, T, theta):
+        # LE08, Eq. (18)
+        return (v * (6. * self.Cp * rho * (T - 1.) +
+                     3. * rho * (v**2 - self.M0**2) +
+                     8. * self.P0 * (theta**4 - rho)) /
+                (24. * self.P0 * self.kappa * theta**3))
+
+    def theta_fTM(self, T, rho):
+        # LE08, Eq. (41)
+        return np.sqrt(np.sqrt(1. / self.gamma / self.P0 *
+                               (self.Km - 3. * self.gamma * self.M0**2 / rho -
+                                3. * T * rho)))
+
+    def determine_epsilon_state(self, domain="zero"):
+        assert(domain in ["zero", "one"])
+
+        eps = self.eps
+        epsasp = self.epsasp
+
+        if domain == "zero":
+            # precursor region
+            root = -1
+
+            # set initial values to state 0
+            rho = 1.
+            T = 1.
+            M = self.M0
+            v = M
+        else:
+            # relaxation region
+            root = 1
+            eps = -eps
+            epsasp = -epsasp
+
+            # set initial values to state 1
+            rho = self.rho1
+            T = self.T1
+            v = self.v1
+            M = v / np.sqrt(T)
+
+        # radiation temperature equals gas temperature
+        theta = T
+
+        # b and d of quadratic equation, LE08 Eq. (17)
+        b = self.Km - self.gamma * self.P0 * theta**4
+        d = np.sqrt(b**2 - 36. * self.gamma * self.M0**2 * T)
+
+        # root of LE08 Eqs. (61) and (62) the same as in (17),
+        # which in relaxation region is problem-dependent
+        if domain == "one":
+            rhop = (b + root * d) / (6. * T)
+            rhom = (b - root * d) / (6. * T)
+            if np.fabs(rhom - rho) < np.fabs(rhop - rho):
+                print("changing sign of root")
+                root = -root
+
+        # LE08 Eq. (61)
+        drhodT = -1. / T * (rho + root * 3. * self.gamma * self.M0**2 / d)
+        # LE08 Eq. (62)
+        drhodtheta = (-2. / 3. * self.P0 * self.gamma * theta**3 / T *
+                      (1. + root *
+                       (self.Km - self.gamma * self.P0 * theta**4) / d))
+        # LE08 Eq. (59)
+        c1 = self.M0 / (24. * self.P0 * self.kappa * rho**2 * theta**3)
+        # LE08 Eq. (60)
+        c2 = self.P0 / (3. * self.Cp * self.M0 * (M**2 - 1.))
+        # LE08 Eq. (55)
+        dGdT = c1 * (6. * self.Cp * rho * (2. * drhodT * (T - 1.) + rho) -
+                     6. * self.M0**2 * rho * drhodT +
+                     8. * self.P0 * (drhodT * (theta**4 - 2. * rho)))
+        # LE08 Eq. (56)
+        dGdtheta = c1 * (12. * self.Cp * drhodtheta * rho * (T - 1.) -
+                         6. * self.M0**2 * rho * drhodtheta +
+                         8. * self.P0 * (drhodtheta * (theta**4 - 2. * rho) +
+                                         4. * rho * theta**3))
+        # LE08 Eq. (57)
+        dFdT = c2 * (4. * v * theta**3 * dGdT -
+                     12. * self.sigma * (self.gamma * M**2 - 1.) * T**3)
+        # LE08 Eq. (58)
+        dFdtheta = c2 * (4. * v * theta**3 * dGdtheta +
+                         12. * self.sigma * (self.gamma * M**2 - 1.) *
+                         theta**3)
+
+        # Solving LE08 Eq. (54): difficulty here is the selection of the root.
+        # The root which produces drho/dtheta > 0 is selected.
+        # Trial an error to decide
+        root2 = root
+        dTdtheta = ((dFdT - dGdtheta - root2 * np.sqrt(
+            (dFdT - dGdtheta)**2 + 4. * dGdT * dFdtheta)) / (2. * dGdT))
+        if (drhodT * dTdtheta + drhodtheta) <= 0:
+            print("changing sign of root2")
+            root2 = - root2
+            dTdtheta = (dFdT - dGdtheta - root2 * np.sqrt(
+                (dFdT - dGdtheta)**2 + 4. * dGdT * dFdtheta)) / (2. * dGdT)
+
+        # determine epsilon state according to LE08, Eqs. (42), (43) and (44)
+        # LE08, Eq. (42)
+        thetaeps = theta + eps
+        # LE08, Eq. (43)
+        Teps = T + eps * dTdtheta
+        # LE08, Eq. (17) for epsilon state
+        rhoeps = (self.Km - self.gamma * self.P0 * thetaeps**4 + root *
+                  np.sqrt((self.Km - self.gamma * self.P0 * thetaeps**4)**2 -
+                          36. * self.gamma * self.M0**2 * Teps)) / (6. * Teps)
+        veps = self.M0 / rhoeps
+        Meps = veps / np.sqrt(Teps)
+
+        # LE08, Eq. (18) for epsilon state
+        dthetaepsdx = self.dthetadx(veps, rhoeps, Teps, thetaeps)
+        # LE08, Eq. (44)
+        x0 = -eps / dthetaepsdx
+
+        # LE08 equation system (37), (38)
+        def func(y, M):
+
+            x = y[0]
+            T = y[1]
+
+            v = M * np.sqrt(T)
+            rho = self.M0 / (np.sqrt(T) * M)
+            theta = self.theta_fTM(T, rho)
+
+            tmp = self.dthetadx(v, rho, T, theta)
+            # LE08, Eq. (25)
+            r = 3. * rho * self.sigma * (theta**4 - T**4)
+            # LE08, Eq. (39)
+            ZD = (4. * self.M0 * theta**3 * tmp +
+                  (self.gamma - 1.) / (self.gamma + 1.) *
+                  (self.gamma * M**2 + 1.) * r)
+            # LE08, Eq. (24)
+            ZN = 4. * self.M0 * theta**3 * tmp + (self.gamma * M**2 - 1.) * r
+
+            # LE08, Eq. (37)
+            dxdM = (-6. * self.M0 * rho * T /
+                    ((self.gamma + 1.) * self.P0 * M) * ((M**2 - 1.) / ZD))
+            # LE08, Eq. (38)
+            dTdM = (-2. * (self.gamma - 1.) / (self.gamma + 1.) *
+                    T * ZN / (M * ZD))
+
+            return np.array([dxdM, dTdM])
+
+        # integration runs over M
+        Minteg = np.linspace(Meps, 1. + epsasp, 1000)
+        res = scipy.integrate.odeint(func, np.array([x0, Teps]), Minteg)
+
+        # determine remaining state parameters of relaxation/precursor region
+        xprerel = res[:, 0]
+        Mprerel = Minteg
+        Tprerel = res[:, 1]
+        rhoprerel = self.M0 / Mprerel / np.sqrt(Tprerel)
+        thetaprerel = self.theta_fTM(Tprerel, rhoprerel)
+        vprerel = Mprerel * np.sqrt(Tprerel)
+
+        # necessary in case of a continuous shock
+        dxdMprerel = func([xprerel[-1], Tprerel[-1]], Minteg[-1])[0]
+
+        return (xprerel, vprerel, Mprerel, rhoprerel, Tprerel, thetaprerel,
+                dxdMprerel)
+
+    def connect_precursor_relaxation_domains(self, diagnostic_plots=False):
+
+        xpre, vpre, Mpre, rhopre, Tpre, thetapre, dxdMpre = \
+            self.determine_epsilon_state(domain="zero")
+        xrel, vrel, Mrel, rhorel, Trel, thetarel, dxdMrel = \
+            self.determine_epsilon_state(domain="one")
+
+        ppre = rhopre * Tpre / self.gamma
+        prel = rhorel * Trel / self.gamma
+
+        if thetapre[-1] > thetarel[-1]:
+            # precursor and relaxation region are connected by a shock
+            print("Discontinuous case")
+
+            # both regions have to be translated so that theta is continuous
+            # and the density fulfils the hydrodynamic jump conditions
+            # see e.g. Clarke & Carswell 2007 for the density jump condition
+            loc = []
+            dtheta = []
+            rhojump = []
+
+            # for now, matching is achieved by a brute force approach -
+            # not elegant but works
+            for i in range(len(xpre)-1, 100, -1):
+                for j in range(len(xrel)-1, 100, -1):
+                    loc.append((i, j))
+
+                    # deviation from continuity of radiative temperature
+                    dtheta.append((thetapre[i] - thetarel[j]))
+                    # deviation from density jump condition
+                    rhojump.append((rhorel[j] / rhopre[i] -
+                                    ((self.gamma + 1.) * prel[j] +
+                                     (self.gamma - 1.) * ppre[i]) /
+                                    ((self.gamma + 1.) * ppre[i] +
+                                     (self.gamma - 1.) * prel[j])))
+
+            # index of location of hydrodynamic shock in precursor
+            # and relaxation region
+            i = np.argmin(np.fabs(dtheta) / np.max(np.fabs(dtheta)) +
+                          np.fabs(rhojump) / np.max(np.fabs(rhojump)))
+
+            ipre = loc[i][0]
+            irel = loc[i][1]
+
+            # determine translation offset
+            dxpre = -xpre[ipre]
+            dxrel = -xrel[irel]
+
+            x = np.append((xpre + dxpre)[:ipre], ((xrel + dxrel)[:irel])[::-1])
+            theta = np.append(thetapre[:ipre], (thetarel[:irel])[::-1])
+            T = np.append(Tpre[:ipre], (Trel[:irel])[::-1])
+            rho = np.append(rhopre[:ipre], (rhorel[:irel])[::-1])
+            M = np.append(Mpre[:ipre], (Mrel[:irel])[::-1])
+            v = np.append(vpre[:ipre], (vrel[:irel])[::-1])
+
+        else:
+            # precursor and relaxation region connect smoothly
+            print("Continuous Case")
+
+            # determine endpoints of relaxation and precursor region according
+            # to LE08 Eq. (65)
+            xl = self.epsasp * dxdMpre
+            xr = -self.epsasp * dxdMrel
+
+            # determine translation offset
+            dxpre = xl - xpre[-1]
+            dxrel = xr - xrel[-1]
+
+            x = np.append((xpre + dxpre), ((xrel + dxrel))[::-1])
+            theta = np.append(thetapre, (thetarel)[::-1])
+            T = np.append(Tpre, (Trel)[::-1])
+            rho = np.append(rhopre, (rhorel)[::-1])
+            M = np.append(Mpre, (Mrel)[::-1])
+            v = np.append(vpre, (vrel)[::-1])
+
+        return x, v, M, rho, T, theta
+
+    def sample_shock(self, xmin=-0.25, xmax=0.25):
+
+        x, v, M, rho, T, theta = \
+            self.connect_precursor_relaxation_domains()
+
+        # if necessary attach state 0 at the left
+        if xmin < np.min(x):
+            np.insert(x, 0, xmin)
+            np.insert(v, 0, self.M0)
+            np.insert(M, 0, self.M0)
+            np.insert(rho, 0, 1)
+            np.insert(T, 0, 1)
+            np.insert(theta, 0, 1)
+
+        # if necessary attach state 1 at the right
+        if xmax > np.max(x):
+            x = np.append(x, xmax)
+            v = np.append(v, self.v1)
+            M = np.append(M, self.v1 / np.sqrt(self.T1))
+            rho = np.append(rho, self.rho1)
+            T = np.append(T, self.T1)
+            theta = np.append(theta, self.T1)
+
+        return x, v, M, rho, T, theta
+
+    def save_shock_data(self, fname, xmin=-0.25, xmax=0.25):
+
+        x, v, M, rho, T, theta = self.sample_shock(xmin=xmin, xmax=xmax)
+
+        np.savetxt(fname, np.array([x, v, M, rho, T, theta]).T)
+
+        return x, v, M, rho, T, theta
