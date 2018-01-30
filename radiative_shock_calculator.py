@@ -249,7 +249,7 @@ class eqdiff_shock_calculator(shock_base):
 
 class noneqdiff_shock_calculator(shock_base):
     def __init__(self, M0, P0, kappa, sigma, gamma=5./3.,
-                 eps=1e-6, epsasp=1e-3, Msamples=1024):
+                 eps=1e-6, epsasp=1e-6, Msamples=1024):
         """Shock structure calculator based on non-equilibrium diffusion
 
         With this tool, the structure of steady radiative shocks can be
@@ -271,10 +271,9 @@ class noneqdiff_shock_calculator(shock_base):
         eps : float
             numerical parameter for the solution strategy; defines epsilon
             state which is used to avoid zero derivatives in limiting down- and
-            upstream states (see LE08, Sec. 5); should be small but not too
-            small in order to avoid numerical stability problems in case of
-            large Mach numbers that lead to continuous solutions (default
-            1e-3).
+            upstream states (see LE08, Sec. 5); may have to be increased in
+            order to avoid numerical stability problems in case of large Mach
+            numbers that lead to continuous solutions (default 1e-6).
         epsasp : float
             numerical parameter for the solution strategy; used to avoid the
             singularity at the adiabatic sonic point (see LE08, Sec. 5 and
@@ -509,11 +508,13 @@ class noneqdiff_shock_calculator(shock_base):
             return np.array([dxdM, dTdM])
 
         # integration runs over M
-        if domain == "zero":
-            Minteg = np.linspace(Meps, 1. + epsasp, self.Msamples)
-        else:
-            Minteg = np.linspace(M, 1. + epsasp, self.Msamples)
-        res = scipy.integrate.odeint(func, np.array([0, Teps]), Minteg)
+        Minteg = np.linspace(Meps, 1. + epsasp, self.Msamples)
+        func0 = np.array([0, Teps])
+
+        # Scipy uses lsoda per default; creates problems for Roth & Kasen 2015
+        # M=70 shock; Potentially, other solvers may work better
+        # TODO: Try scipy.integrate.ode tools
+        res = scipy.integrate.odeint(func, func0, Minteg)
 
         # determine remaining state parameters of relaxation/precursor region
         xprerel = res[:, 0]
@@ -710,17 +711,3 @@ class noneqdiff_shock_calculator(shock_base):
                        T=Tsamples, theta=thetasamples)
 
         return shock
-
-
-# def LE08_examples():
-#     LE08_M1p05 = noneqdiff_shock_calculator(1.05, 1e-4, 1., 1e6, gamma=5./3.)
-#     LE08_M1p05_shock = \
-#         LE08_M1p05.sample_shock_structure(xmin=-0.015, xmax=0.015)
-#     LE08_M1p2 = noneqdiff_shock_calculator(1.2, 1e-4, 1., 1e6, gamma=5./3.)
-#     LE08_M1p2_shock = \
-#         LE08_M1p2.sample_shock_structure(xmin=-0.01, xmax=0.01)
-#
-#     results = collections.namedtuple(
-#         'examples', [])
-# LE08_M1p4_shock = noneqdiff_shock_calculator(1.4, 1e-4, 1., 1e6, gamma=5./3.)
-# LE08_M2_shock = noneqdiff_shock_calculator(2, 1e-4, 1., 1e6, gamma=5./3.)
