@@ -37,7 +37,7 @@ class shock_base(object):
             non-dimensional constant (see LR07, Eq. 3); combination of
             reference values used in the non-dimensionalization process.
         kappa : float
-            radiation diffusivity (definition according to LE08)
+            radiation diffusivity (definition according to LR07!)
         gamma : float
             adiabatic index (default 5/3)
         """
@@ -124,7 +124,9 @@ class shock_base(object):
 
 class eqdiff_shock_calculator(shock_base):
     def __init__(self, M0, P0, kappa, gamma=5./3.):
-        """
+        """Shock structure calculator based on equilibrium diffusion
+
+
         """
         super(eqdiff_shock_calculator, self).__init__(M0, P0, kappa,
                                                       gamma=gamma)
@@ -246,37 +248,135 @@ class eqdiff_shock_calculator(shock_base):
 
 
 class noneqdiff_shock_calculator(shock_base):
+    def __init__(self, M0, P0, kappa, sigma, gamma=5./3.,
+                 eps=1e-6, epsasp=1e-3, Msamples=1024):
+        """Shock structure calculator based on non-equilibrium diffusion
 
-    def __init__(self, M0, P0, kappa, sigma, gamma=5./3.):
+        With this tool, the structure of steady radiative shocks can be
+        calculated using the solution strategy described by LE08.
+
+        Parameters
+        ----------
+        M0 : float
+            downstream Mach number
+        P0 : float
+            non-dimensional constant (see LE08, Eq. 4); combination of
+            reference values used in the non-dimensionalization process.
+        kappa : float
+            radiation diffusivity (definition according to LE08!)
+        sigma : float
+            total dimensionless cross section
+        gamma : float
+            adiabatic index (default 5/3)
+        eps : float
+            numerical parameter for the solution strategy; defines epsilon
+            state which is used to avoid zero derivatives in limiting down- and
+            upstream states (see LE08, Sec. 5); should be small but not too
+            small in order to avoid numerical stability problems in case of
+            large Mach numbers that lead to continuous solutions (default
+            1e-3).
+        epsasp : float
+            numerical parameter for the solution strategy; used to avoid the
+            singularity at the adiabatic sonic point (see LE08, Sec. 5 and
+            Appendix B); should be small; with larger values, artefacts at the
+            interface between the precursor and relaxation region become more
+            pronounced (default 1e-6)
+        Msamples : int
+            numerical parameter for the solution strategy; set the number of
+            integration points used in the determination of the precursor and
+            relaxation region (default 1024).
+        """
         super(noneqdiff_shock_calculator, self).__init__(M0, P0, kappa * P0,
                                                          gamma=gamma)
         self.sigma = sigma
+        # Reset kappa - this is necessary since the definition of kappa in LR07
+        # and LE08 differs by a factor of P0
         self.kappa = kappa
 
+        self.Msamples = Msamples
+
         # epsilon used in LE08, Eqs. (42), (43) and (44)
-        self.eps = 1e-6
+        self.eps = eps
 
         # epsilon use in steps 2 and 3 of the LE08 solution strategy
-        self.epsasp = 1e-3
+        self.epsasp = epsasp
 
         # LE08 Eqs. (16) and (18)
         self.Cp = 1. / (self.gamma - 1.)
         self.Km = 3. * (self.gamma * self.M0**2 + 1.) + self.gamma * self.P0
 
-    def dthetadx(self, v, rho, T, theta):
+    def _dthetadx(self, v, rho, T, theta):
+        """spatial derivative of radiation temperature
+
+        Parameters
+        ----------
+        v : float or np.ndarray
+            dimensionless velocity
+        rho : float or np.ndarray
+            dimensionless density
+        T : float or np.ndarray
+            dimensionless temperature
+        theta : float or np.ndarray
+            dimensionless radiation temperature
+
+        Returns
+        -------
+        dthetadx : float or np.ndarray
+            dimensionless spatial derivative of radiation temperature
+        """
         # LE08, Eq. (18)
         return (v * (6. * self.Cp * rho * (T - 1.) +
                      3. * rho * (v**2 - self.M0**2) +
                      8. * self.P0 * (theta**4 - rho)) /
                 (24. * self.P0 * self.kappa * theta**3))
 
-    def theta_fTM(self, T, rho):
-        # LE08, Eq. (41)
-        return np.sqrt(np.sqrt(1. / self.gamma / self.P0 *
-                               (self.Km - 3. * self.gamma * self.M0**2 / rho -
-                                3. * T * rho)))
+    def _theta_fTM(self, T, rho):
+        """radiation temperature as a function of temperature and density
 
-    def determine_epsilon_state(self, domain="zero"):
+        WARNING: at large Mach numbers and small values for eps, numerical
+        inaccuracies may lead to negative values in the root and a breakdown of
+        the solution strategy. Increasing the value for eps has typically
+        helped to avoid this problem.
+
+        Parameters
+        ----------
+        T : float or np.ndarray
+            dimensionless temperature
+        rho : float or np.ndarray
+            dimensionless density
+
+        Returns
+        -------
+        theta : float or np.ndarray
+            dimensionless radiation temperature
+        """
+        # LE08, Eq. (41)
+        tmp = (1. / self.gamma / self.P0 *
+               (self.Km - 3. * self.gamma * self.M0**2 / rho -
+                3. * T * rho))
+        return np.sqrt(np.sqrt(tmp))
+
+    def _solve_precursor_relaxation_region(self, domain="zero"):
+        """Solves shock structure in precursor or relaxation region
+
+        This routine preforms the bulk of the work. It determines first the
+        epsilon state and then performs a numerical integration over the Mach
+        number from the epsilon state towards the adiabatic sonic point.
+
+        Parameters
+        ----------
+        domain : str
+            either 'zero' or 'one'; determines whether the precursor or the
+            relaxation region is treated (default 'zero')
+
+        Returns
+        -------
+        precursor_relaxation : namedtuple
+            physical state in the precursor or relaxation region in terms of
+            the dimensionless location, velocity, Mach number, density,
+            temperature, radiation temperature, derivative of the position
+            with respect to the Mach number.
+        """
         assert(domain in ["zero", "one"])
 
         eps = self.eps
@@ -284,6 +384,7 @@ class noneqdiff_shock_calculator(shock_base):
 
         if domain == "zero":
             # precursor region
+            print("Precursor region")
             root = -1
 
             # set initial values to state 0
@@ -293,6 +394,7 @@ class noneqdiff_shock_calculator(shock_base):
             v = M
         else:
             # relaxation region
+            print("Relaxation region")
             root = 1
             eps = -eps
             epsasp = -epsasp
@@ -371,21 +473,23 @@ class noneqdiff_shock_calculator(shock_base):
         Meps = veps / np.sqrt(Teps)
 
         # LE08, Eq. (18) for epsilon state
-        dthetaepsdx = self.dthetadx(veps, rhoeps, Teps, thetaeps)
+        dthetaepsdx = self._dthetadx(veps, rhoeps, Teps, thetaeps)
         # LE08, Eq. (44)
         x0 = -eps / dthetaepsdx
 
         # LE08 equation system (37), (38)
         def func(y, M):
 
-            x = y[0]
+            # x = y[0]
             T = y[1]
 
+            # LE08, Eq. (14)
             v = M * np.sqrt(T)
-            rho = self.M0 / (np.sqrt(T) * M)
-            theta = self.theta_fTM(T, rho)
+            # LE08, Eq. (13)
+            rho = self.M0 / v
+            theta = self._theta_fTM(T, rho)
 
-            tmp = self.dthetadx(v, rho, T, theta)
+            tmp = self._dthetadx(v, rho, T, theta)
             # LE08, Eq. (25)
             r = 3. * rho * self.sigma * (theta**4 - T**4)
             # LE08, Eq. (39)
@@ -405,36 +509,77 @@ class noneqdiff_shock_calculator(shock_base):
             return np.array([dxdM, dTdM])
 
         # integration runs over M
-        Minteg = np.linspace(Meps, 1. + epsasp, 1000)
-        res = scipy.integrate.odeint(func, np.array([x0, Teps]), Minteg)
+        if domain == "zero":
+            Minteg = np.linspace(Meps, 1. + epsasp, self.Msamples)
+        else:
+            Minteg = np.linspace(M, 1. + epsasp, self.Msamples)
+        res = scipy.integrate.odeint(func, np.array([0, Teps]), Minteg)
 
         # determine remaining state parameters of relaxation/precursor region
         xprerel = res[:, 0]
         Mprerel = Minteg
         Tprerel = res[:, 1]
         rhoprerel = self.M0 / Mprerel / np.sqrt(Tprerel)
-        thetaprerel = self.theta_fTM(Tprerel, rhoprerel)
+        thetaprerel = self._theta_fTM(Tprerel, rhoprerel)
         vprerel = Mprerel * np.sqrt(Tprerel)
+
+        # insert 0 or 1 state at the beginning
+        xprerel = np.insert(xprerel, 0, x0)
+        Mprerel = np.insert(Mprerel, 0, M)
+        Tprerel = np.insert(Tprerel, 0, T)
+        rhoprerel = np.insert(rhoprerel, 0, rho)
+        thetaprerel = np.insert(thetaprerel, 0, theta)
+        vprerel = np.insert(vprerel, 0, v)
 
         # necessary in case of a continuous shock
         dxdMprerel = func([xprerel[-1], Tprerel[-1]], Minteg[-1])[0]
 
-        return (xprerel, vprerel, Mprerel, rhoprerel, Tprerel, thetaprerel,
-                dxdMprerel)
+        result = collections.namedtuple(
+            'precursor_relaxation',
+            ['x', 'v', 'M', 'rho', 'T', 'theta', 'dxdM'])
+        precursor_relaxation = result(x=xprerel, v=vprerel, M=Mprerel,
+                                      rho=rhoprerel, T=Tprerel,
+                                      theta=thetaprerel, dxdM=dxdMprerel)
 
-    def connect_precursor_relaxation_domains(self, diagnostic_plots=False):
+        return precursor_relaxation
 
-        xpre, vpre, Mpre, rhopre, Tpre, thetapre, dxdMpre = \
-            self.determine_epsilon_state(domain="zero")
-        xrel, vrel, Mrel, rhorel, Trel, thetarel, dxdMrel = \
-            self.determine_epsilon_state(domain="one")
+    def _connect_domains(self):
+        """Connect the solutions in the precursor and the relaxation regions
+
+        Depending on the radiation temperature around the adiabatic sonic
+        point, the two regimes are connected via an embedded hydrodynamic shock
+        or joined smoothly.
+
+        Returns
+        ------
+        shock : namedtuple
+            shock structure in terms of the dimensionless location, velocity,
+            Mach number, density, temperature, radiation temperature.
+        """
+
+        precursor = self._solve_precursor_relaxation_region(domain="zero")
+        xpre, vpre, Mpre, rhopre, Tpre, thetapre, dxdMpre = precursor
+
+        # sanity check
+        if np.isnan(xpre).sum() > 0:
+            print("Problems in precursor: {:d} NaNs in x".format(
+                np.isnan(xpre).sum()))
+
+        relaxation = self._solve_precursor_relaxation_region(domain="one")
+        xrel, vrel, Mrel, rhorel, Trel, thetarel, dxdMrel = relaxation
+
+        # sanity check
+        if np.isnan(xrel).sum() > 0:
+            print("Problems in relaxation: {:d} NaNs in x".format(
+                np.isnan(xrel).sum()))
 
         ppre = rhopre * Tpre / self.gamma
         prel = rhorel * Trel / self.gamma
 
+        # decide whether there is an embedded shock or not
         if thetapre[-1] > thetarel[-1]:
             # precursor and relaxation region are connected by a shock
-            print("Discontinuous case")
+            print("Discontinuous case: embedded hydrodynamic shock")
 
             # both regions have to be translated so that theta is continuous
             # and the density fulfils the hydrodynamic jump conditions
@@ -445,8 +590,10 @@ class noneqdiff_shock_calculator(shock_base):
 
             # for now, matching is achieved by a brute force approach -
             # not elegant but works
-            for i in range(len(xpre)-1, 100, -1):
-                for j in range(len(xrel)-1, 100, -1):
+            # TODO improve this; should be able to do this with numpy routines
+            # alone
+            for i in range(len(xpre)-1, self.Msamples//10, -1):
+                for j in range(len(xrel)-1, self.Msamples//10, -1):
                     loc.append((i, j))
 
                     # deviation from continuity of radiative temperature
@@ -479,7 +626,7 @@ class noneqdiff_shock_calculator(shock_base):
 
         else:
             # precursor and relaxation region connect smoothly
-            print("Continuous Case")
+            print("Continuous case: no embedded hydrodynamic shock")
 
             # determine endpoints of relaxation and precursor region according
             # to LE08 Eq. (65)
@@ -497,37 +644,83 @@ class noneqdiff_shock_calculator(shock_base):
             M = np.append(Mpre, (Mrel)[::-1])
             v = np.append(vpre, (vrel)[::-1])
 
-        return x, v, M, rho, T, theta
+        result = collections.namedtuple(
+            'shock', ['x', 'v', 'M', 'rho', 'T', 'theta'])
+        shock = result(x=x, v=v, M=M, rho=rho, T=T, theta=theta)
 
-    def sample_shock(self, xmin=-0.25, xmax=0.25):
+        return shock
 
-        x, v, M, rho, T, theta = \
-            self.connect_precursor_relaxation_domains()
+    def calculate_shock_structure(self):
+        """Calculate the shock structure
 
-        # if necessary attach state 0 at the left
-        if xmin < np.min(x):
-            np.insert(x, 0, xmin)
-            np.insert(v, 0, self.M0)
-            np.insert(M, 0, self.M0)
-            np.insert(rho, 0, 1)
-            np.insert(T, 0, 1)
-            np.insert(theta, 0, 1)
+        This is one of the main routines which should be used to calculate the
+        shock structure. The spatial gridding follows directly from the M
+        integration and will not be equidistant. Also, the extent of the
+        spatial domain is automatically set by the integration. If instead a
+        uniform gridding is desired, the 'sample_shock' routine should be
+        called.
 
-        # if necessary attach state 1 at the right
-        if xmax > np.max(x):
-            x = np.append(x, xmax)
-            v = np.append(v, self.v1)
-            M = np.append(M, self.v1 / np.sqrt(self.T1))
-            rho = np.append(rho, self.rho1)
-            T = np.append(T, self.T1)
-            theta = np.append(theta, self.T1)
+        Returns
+        -------
+        shock : namedtuple
+            shock structure in terms of the dimensionless location, velocity,
+            Mach number, density, temperature, radiation temperature.
+        """
 
-        return x, v, M, rho, T, theta
+        shock = self._connect_domains()
+        return shock
 
-    def save_shock_data(self, fname, xmin=-0.25, xmax=0.25):
+    def sample_shock_structure(self, xmin=-0.25, xmax=0.25, Nsamples=2048):
+        """Calculate the shock structure on a uniform spatial grid
 
-        x, v, M, rho, T, theta = self.sample_shock(xmin=xmin, xmax=xmax)
+        This is one of the main routines which should be used to calculate the
+        shock structure. The return shock structure has been mapped onto a
+        uniform spatial grid.
 
-        np.savetxt(fname, np.array([x, v, M, rho, T, theta]).T)
+        Parameters
+        ----------
+        xmin : float
+            left domain edge
+        xmax : float
+            right domain edge
+        Nsamples : int
+            number of point of the uniform grid
 
-        return x, v, M, rho, T, theta
+        Returns
+        -------
+        shock : namedtuple
+            shock structure in terms of the dimensionless location, velocity,
+            Mach number, density, temperature, radiation temperature.
+        """
+
+        shock = self.calculate_shock_structure()
+        x, v, M, rho, T, theta = shock
+
+        xsamples = np.linspace(xmin, xmax, Nsamples)
+
+        vsamples = np.interp(xsamples, x, v, left=self.M0, right=self.v1)
+        rhosamples = np.interp(xsamples, x, rho, left=1., right=self.rho1)
+        Tsamples = np.interp(xsamples, x, T, left=1., right=self.T1)
+        thetasamples = np.interp(xsamples, x, theta, left=1., right=self.T1)
+        Msamples = vsamples / np.sqrt(Tsamples)
+
+        result = collections.namedtuple(
+            'shock', ['x', 'v', 'M', 'rho', 'T', 'theta'])
+        shock = result(x=xsamples, v=vsamples, M=Msamples, rho=rhosamples,
+                       T=Tsamples, theta=thetasamples)
+
+        return shock
+
+
+# def LE08_examples():
+#     LE08_M1p05 = noneqdiff_shock_calculator(1.05, 1e-4, 1., 1e6, gamma=5./3.)
+#     LE08_M1p05_shock = \
+#         LE08_M1p05.sample_shock_structure(xmin=-0.015, xmax=0.015)
+#     LE08_M1p2 = noneqdiff_shock_calculator(1.2, 1e-4, 1., 1e6, gamma=5./3.)
+#     LE08_M1p2_shock = \
+#         LE08_M1p2.sample_shock_structure(xmin=-0.01, xmax=0.01)
+#
+#     results = collections.namedtuple(
+#         'examples', [])
+# LE08_M1p4_shock = noneqdiff_shock_calculator(1.4, 1e-4, 1., 1e6, gamma=5./3.)
+# LE08_M2_shock = noneqdiff_shock_calculator(2, 1e-4, 1., 1e6, gamma=5./3.)
