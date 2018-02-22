@@ -120,6 +120,7 @@ class shock_base(object):
         self.rho1 = res[0]
         self.T1 = res[1]
         self.v1 = self.M0 / self.rho1
+        self.M1 = self.v1 / np.sqrt(self.T1)
 
 
 class eqdiff_shock_calculator(shock_base):
@@ -249,7 +250,8 @@ class eqdiff_shock_calculator(shock_base):
 
 class noneqdiff_shock_calculator(shock_base):
     def __init__(self, M0, P0, kappa, sigma, gamma=5./3.,
-                 eps=1e-6, epsasp=1e-6, Msamples=1024):
+                 eps=1e-6, epsasp=1e-6, Msamples=1024, epsrel=None,
+                 epsasprel=None, matching_mode="theta_rhojump"):
         """Shock structure calculator based on non-equilibrium diffusion
 
         With this tool, the structure of steady radiative shocks can be
@@ -287,6 +289,10 @@ class noneqdiff_shock_calculator(shock_base):
         """
         super(noneqdiff_shock_calculator, self).__init__(M0, P0, kappa * P0,
                                                          gamma=gamma)
+
+        self.matching_mode = matching_mode
+        assert(matching_mode in ["theta_rhojump", "theta_only"])
+
         self.sigma = sigma
         # Reset kappa - this is necessary since the definition of kappa in LR07
         # and LE08 differs by a factor of P0
@@ -299,6 +305,14 @@ class noneqdiff_shock_calculator(shock_base):
 
         # epsilon use in steps 2 and 3 of the LE08 solution strategy
         self.epsasp = epsasp
+
+        if epsrel is None:
+            epsrel = eps
+        if epsasprel is None:
+            epsasprel = epsasp
+
+        self.epsrel = epsrel
+        self.epsasprel = epsasprel
 
         # LE08 Eqs. (16) and (18)
         self.Cp = 1. / (self.gamma - 1.)
@@ -378,12 +392,11 @@ class noneqdiff_shock_calculator(shock_base):
         """
         assert(domain in ["zero", "one"])
 
-        eps = self.eps
-        epsasp = self.epsasp
-
         if domain == "zero":
             # precursor region
             print("Precursor region")
+            eps = self.eps
+            epsasp = self.epsasp
             root = -1
 
             # set initial values to state 0
@@ -395,8 +408,8 @@ class noneqdiff_shock_calculator(shock_base):
             # relaxation region
             print("Relaxation region")
             root = 1
-            eps = -eps
-            epsasp = -epsasp
+            eps = -self.epsrel
+            epsasp = -self.epsasprel
 
             # set initial values to state 1
             rho = self.rho1
@@ -508,7 +521,8 @@ class noneqdiff_shock_calculator(shock_base):
             return np.array([dxdM, dTdM])
 
         # integration runs over M
-        Minteg = np.linspace(Meps, 1. + epsasp, self.Msamples)
+        Minteg = np.logspace(np.log10(Meps), np.log10(1. + epsasp),
+                             self.Msamples)
         func0 = np.array([0, Teps])
 
         # Scipy uses lsoda per default; creates problems for Roth & Kasen 2015
@@ -520,6 +534,7 @@ class noneqdiff_shock_calculator(shock_base):
         xprerel = res[:, 0]
         Mprerel = Minteg
         Tprerel = res[:, 1]
+
         rhoprerel = self.M0 / Mprerel / np.sqrt(Tprerel)
         thetaprerel = self._theta_fTM(Tprerel, rhoprerel)
         vprerel = Mprerel * np.sqrt(Tprerel)
@@ -531,15 +546,16 @@ class noneqdiff_shock_calculator(shock_base):
         rhoprerel = np.insert(rhoprerel, 0, rho)
         thetaprerel = np.insert(thetaprerel, 0, theta)
         vprerel = np.insert(vprerel, 0, v)
+        pprerel = rhoprerel * Tprerel / self.gamma
 
         # necessary in case of a continuous shock
         dxdMprerel = func([xprerel[-1], Tprerel[-1]], Minteg[-1])[0]
 
         result = collections.namedtuple(
             'precursor_relaxation',
-            ['x', 'v', 'M', 'rho', 'T', 'theta', 'dxdM'])
+            ['x', 'v', 'M', 'rho', 'T', 'p', 'theta', 'dxdM'])
         precursor_relaxation = result(x=xprerel, v=vprerel, M=Mprerel,
-                                      rho=rhoprerel, T=Tprerel,
+                                      rho=rhoprerel, T=Tprerel, p=pprerel,
                                       theta=thetaprerel, dxdM=dxdMprerel)
 
         return precursor_relaxation
@@ -559,7 +575,8 @@ class noneqdiff_shock_calculator(shock_base):
         """
 
         precursor = self._solve_precursor_relaxation_region(domain="zero")
-        xpre, vpre, Mpre, rhopre, Tpre, thetapre, dxdMpre = precursor
+        xpre, vpre, Mpre, rhopre, Tpre, ppre, thetapre, dxdMpre = precursor
+        self.precursor = precursor
 
         # sanity check
         if np.isnan(xpre).sum() > 0:
@@ -567,7 +584,8 @@ class noneqdiff_shock_calculator(shock_base):
                 np.isnan(xpre).sum()))
 
         relaxation = self._solve_precursor_relaxation_region(domain="one")
-        xrel, vrel, Mrel, rhorel, Trel, thetarel, dxdMrel = relaxation
+        xrel, vrel, Mrel, rhorel, Trel, prel, thetarel, dxdMrel = relaxation
+        self.relaxation = relaxation
 
         # sanity check
         if np.isnan(xrel).sum() > 0:
@@ -585,40 +603,60 @@ class noneqdiff_shock_calculator(shock_base):
             # both regions have to be translated so that theta is continuous
             # and the density fulfils the hydrodynamic jump conditions
             # see e.g. Clarke & Carswell 2007 for the density jump condition
-            loc = []
-            dtheta = []
-            rhojump = []
 
-            # for now, matching is achieved by a brute force approach -
-            # not elegant but works
-            # TODO improve this; should be able to do this with numpy routines
-            # alone
-            for i in range(len(xpre)-1, self.Msamples//10, -1):
-                for j in range(len(xrel)-1, self.Msamples//10, -1):
-                    loc.append((i, j))
+            if self.matching_mode == "theta_rhojump":
+                x = rhorel
+                y = (rhopre *
+                     ((self.gamma + 1.) * prel + (self.gamma - 1.) * ppre) /
+                     ((self.gamma + 1.) * ppre + (self.gamma - 1.) * prel))
+                X, Y = np.meshgrid(x, y)
 
-                    # deviation from continuity of radiative temperature
-                    dtheta.append((thetapre[i] - thetarel[j]))
-                    # deviation from density jump condition
-                    rhojump.append((rhorel[j] / rhopre[i] -
-                                    ((self.gamma + 1.) * prel[j] +
-                                     (self.gamma - 1.) * ppre[i]) /
-                                    ((self.gamma + 1.) * ppre[i] +
-                                     (self.gamma - 1.) * prel[j])))
+                xt = thetarel
+                yt = thetapre
+                Xt, Yt = np.meshgrid(xt, yt)
 
-            # index of location of hydrodynamic shock in precursor
-            # and relaxation region
-            i = np.argmin(np.fabs(dtheta) / np.max(np.fabs(dtheta)) +
-                          np.fabs(rhojump) / np.max(np.fabs(rhojump)))
+                imatch = np.unravel_index(np.argmin((np.fabs(X - Y) / X) +
+                                                    (np.fabs(Xt - Yt) / Xt),
+                                                    axis=None), Xt.shape)
 
-            ipre = loc[i][0]
-            irel = loc[i][1]
+                ipre = imatch[0]
+                irel = imatch[1]
+
+            elif self.matching_mode == "theta_only":
+                # Quite some effort went into determining the best way to match
+                # the precursor and relaxation region in the presence of a
+                # shock; in the end it turned out that simply checking for the
+                # where the relaxation branch theta intercepts the precursor
+                # branch theta is the most reliable strategy:
+                try:
+                    imatch = np.where(
+                        np.diff(np.sign(thetapre - thetarel)) != 0)[0][0] + 1
+                except IndexError:
+                    print("Error in matching precursor and relaxation branch:")
+                    print("precursor and relaxation theta do not intercept")
+                    print("Try reducing 'eps' and 'epsrel'")
+                    print("Try increasing 'Msamples'")
+                    raise
+
+                ipre = imatch
+                irel = imatch
+            else:
+                raise ValueError("Unknown matching_mode")
 
             # determine translation offset
             dxpre = -xpre[ipre]
             dxrel = -xrel[irel]
 
-            x = np.append((xpre + dxpre)[:ipre], ((xrel + dxrel)[:irel])[::-1])
+            self.Ms = Mrel[irel]
+            self.Msalt = self.M0 / rhorel[irel] / np.sqrt(Trel[irel])
+
+            # TODO: calculate deviation from hydrodynamic jump condition
+
+            irel += 1
+            ipre += 1
+
+            x = np.append((xpre + dxpre)[:ipre],
+                          ((xrel + dxrel)[:irel])[::-1])
             theta = np.append(thetapre[:ipre], (thetarel[:irel])[::-1])
             T = np.append(Tpre[:ipre], (Trel[:irel])[::-1])
             rho = np.append(rhopre[:ipre], (rhorel[:irel])[::-1])
@@ -628,6 +666,9 @@ class noneqdiff_shock_calculator(shock_base):
         else:
             # precursor and relaxation region connect smoothly
             print("Continuous case: no embedded hydrodynamic shock")
+
+            self.Ms = 1.
+            self.Msalt = 1.
 
             # determine endpoints of relaxation and precursor region according
             # to LE08 Eq. (65)
