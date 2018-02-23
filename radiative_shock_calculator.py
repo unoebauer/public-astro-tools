@@ -4,6 +4,10 @@ import numpy as np
 import astropy.constants as c
 import scipy.optimize
 import scipy.integrate
+import matplotlib
+# TODO check for X-server
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
 """
 This module provides tools to calculate the structure of steady radiative
 shocks based on equilibrium and non-equilibrium diffusion using the solution
@@ -819,3 +823,47 @@ class noneqdiff_shock_calculator(shock_base):
             'shock', ['x', 'v', 'M', 'rho', 'T', 'p', 'theta'])
         shock = result(x=x, v=v, M=M, rho=rho, T=T, p=p, theta=theta)
         return shock
+
+
+class noeqdiff_shock(noneqdiff_shock_calculator):
+    def __init__(self, M0, P0, kappa, sigma, gamma=5./3.,
+                 eps=1e-6, epsasp=1e-6, Msamples=1024, epsrel=None,
+                 epsasprel=None, matching_mode="theta_rhojump", xmin=None,
+                 xmax=None):
+        super(noeqdiff_shock, self).__init__(M0, P0, kappa, sigma, gamma=gamma,
+                                             eps=eps, epsasp=epsasp,
+                                             Msamples=Msamples, epsrel=epsrel,
+                                             epsasprel=epsasprel,
+                                             matching_mode=matching_mode)
+
+        self.shock_profile = self.calculate_shock_structure(xmin=xmin,
+                                                            xmax=xmax)
+        # TODO add plotting routines
+
+    def show_profile(self):
+        fig = plt.figure(figsize=(16, 4))
+        ax = fig.add_subplot(131)
+        ax.plot(self.shock_profile.x, self.shock_profile.T, label=r"$T$")
+        ax.plot(self.shock_profile.x, self.shock_profile.theta, ls="dashed",
+                label=r"$\theta$")
+        ax.set_xlabel("x")
+        ax.set_ylabel(r"$T, \theta$")
+        ax.legend(frameon=False)
+        ax = fig.add_subplot(132)
+        ax.plot(self.shock_profile.x, self.shock_profile.M)
+        ax.set_xlabel("x")
+        ax.set_ylabel(r"$M$")
+        ax.set_title(r"$M={:.2f}$".format(self.shock_profile.M[0]))
+        ax = fig.add_subplot(133)
+        ax.plot(self.shock_profile.x, self.shock_profile.rho)
+        ax.set_xlabel("x")
+        ax.set_ylabel(r"$\rho$")
+
+        return fig
+
+
+# examples from the LE08 paper
+class LE08_M1p05_shock(noeqdiff_shock):
+    def __init__(self):
+        super(LE08_M1p05_shock, self).__init__(1.05, 1e-4, 1., 1e6,
+                                               xmin=-0.015, xmax=0.015)
