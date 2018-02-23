@@ -293,6 +293,8 @@ class noneqdiff_shock_calculator(shock_base):
         self.matching_mode = matching_mode
         assert(matching_mode in ["theta_rhojump", "theta_only"])
 
+        self.odeint_mode = "odeint"
+
         self.sigma = sigma
         # Reset kappa - this is necessary since the definition of kappa in LR07
         # and LE08 differs by a factor of P0
@@ -520,6 +522,11 @@ class noneqdiff_shock_calculator(shock_base):
 
             return np.array([dxdM, dTdM])
 
+        def func2(M, y):
+
+            res = func(y, M)
+            return res
+
         # integration runs over M
         Minteg = np.logspace(np.log10(Meps), np.log10(1. + epsasp),
                              self.Msamples)
@@ -528,7 +535,24 @@ class noneqdiff_shock_calculator(shock_base):
         # Scipy uses lsoda per default; creates problems for Roth & Kasen 2015
         # M=70 shock; Potentially, other solvers may work better
         # TODO: Try scipy.integrate.ode tools
-        res = scipy.integrate.odeint(func, func0, Minteg)
+        if self.odeint_mode == "odeint":
+            res = scipy.integrate.odeint(func, func0, Minteg)
+
+        elif self.odeint_mode == "ode":
+            r = scipy.integrate.ode(func2).set_integrator('lsoda')
+            r.set_initial_value(func0, t=Minteg[0])
+
+            res = np.zeros((len(Minteg), 2))
+            res[0, :] = func0
+
+            for i, Mi in enumerate(Minteg[1:]):
+                res[i, :] = r.integrate(Mi)
+                if not r.successful():
+                    print("Error in Integration")
+                    print("i ", i)
+                    raise Exception
+        else:
+            raise ValueError("Unknown 'odeint_mode'")
 
         # determine remaining state parameters of relaxation/precursor region
         xprerel = res[:, 0]
@@ -560,6 +584,18 @@ class noneqdiff_shock_calculator(shock_base):
 
         return precursor_relaxation
 
+    def _solve_precursor_region(self):
+
+        precursor = self._solve_precursor_relaxation_region(domain="zero")
+
+        return precursor
+
+    def _solve_relaxation_region(self):
+
+        relaxation = self._solve_precursor_relaxation_region(domain="one")
+
+        return relaxation
+
     def _connect_domains(self):
         """Connect the solutions in the precursor and the relaxation regions
 
@@ -574,7 +610,7 @@ class noneqdiff_shock_calculator(shock_base):
             Mach number, density, temperature, radiation temperature.
         """
 
-        precursor = self._solve_precursor_relaxation_region(domain="zero")
+        precursor = self._solve_precursor_region()
         xpre, vpre, Mpre, rhopre, Tpre, ppre, thetapre, dxdMpre = precursor
         self.precursor = precursor
 
@@ -583,7 +619,7 @@ class noneqdiff_shock_calculator(shock_base):
             print("Problems in precursor: {:d} NaNs in x".format(
                 np.isnan(xpre).sum()))
 
-        relaxation = self._solve_precursor_relaxation_region(domain="one")
+        relaxation = self._solve_relaxation_region()
         xrel, vrel, Mrel, rhorel, Trel, prel, thetarel, dxdMrel = relaxation
         self.relaxation = relaxation
 
@@ -599,6 +635,7 @@ class noneqdiff_shock_calculator(shock_base):
         if thetapre[-1] > thetarel[-1]:
             # precursor and relaxation region are connected by a shock
             print("Discontinuous case: embedded hydrodynamic shock")
+            self.case = "shock"
 
             # both regions have to be translated so that theta is continuous
             # and the density fulfils the hydrodynamic jump conditions
@@ -648,7 +685,6 @@ class noneqdiff_shock_calculator(shock_base):
             dxrel = -xrel[irel]
 
             self.Ms = Mrel[irel]
-            self.Msalt = self.M0 / rhorel[irel] / np.sqrt(Trel[irel])
 
             # TODO: calculate deviation from hydrodynamic jump condition
 
@@ -667,8 +703,8 @@ class noneqdiff_shock_calculator(shock_base):
             # precursor and relaxation region connect smoothly
             print("Continuous case: no embedded hydrodynamic shock")
 
+            self.case = "continuous"
             self.Ms = 1.
-            self.Msalt = 1.
 
             # determine endpoints of relaxation and precursor region according
             # to LE08 Eq. (65)
@@ -686,13 +722,14 @@ class noneqdiff_shock_calculator(shock_base):
             M = np.append(Mpre, (Mrel)[::-1])
             v = np.append(vpre, (vrel)[::-1])
 
+        p = rho * T / self.gamma
         result = collections.namedtuple(
-            'shock', ['x', 'v', 'M', 'rho', 'T', 'theta'])
-        shock = result(x=x, v=v, M=M, rho=rho, T=T, theta=theta)
+            'shock', ['x', 'v', 'M', 'rho', 'T', 'p', 'theta'])
+        shock = result(x=x, v=v, M=M, rho=rho, T=T, p=p, theta=theta)
 
         return shock
 
-    def calculate_shock_structure(self):
+    def calculate_shock_structure(self, xmin=None, xmax=None):
         """Calculate the shock structure
 
         This is one of the main routines which should be used to calculate the
@@ -710,45 +747,44 @@ class noneqdiff_shock_calculator(shock_base):
         """
 
         shock = self._connect_domains()
-        return shock
+        x, v, M, rho, T, p, theta = shock
+        if xmin is not None:
+            if xmin < x[0]:
+                x = np.insert(x, 0, xmin)
+                v = np.insert(v, 0, self.M0)
+                M = np.insert(M, 0, self.M0)
+                rho = np.insert(rho, 0, 1.)
+                T = np.insert(T, 0, 1.)
+                theta = np.insert(theta, 0, 1.)
+            else:
+                indices = (x >= xmin)
+                x = x[indices]
+                v = v[indices]
+                M = M[indices]
+                rho = rho[indices]
+                T = T[indices]
+                theta = theta[indices]
 
-    def sample_shock_structure(self, xmin=-0.25, xmax=0.25, Nsamples=2048):
-        """Calculate the shock structure on a uniform spatial grid
+        if xmax is not None:
+            if xmax > x[-1]:
+                x = np.append(x, xmax)
+                v = np.append(v, self.v1)
+                M = np.append(M, self.M1)
+                rho = np.append(rho, self.rho1)
+                T = np.append(T, self.T1)
+                theta = np.append(theta, self.T1)
+            else:
+                indices = (x <= xmax)
+                x = x[indices]
+                v = v[indices]
+                M = M[indices]
+                rho = rho[indices]
+                T = T[indices]
+                theta = theta[indices]
 
-        This is one of the main routines which should be used to calculate the
-        shock structure. The return shock structure has been mapped onto a
-        uniform spatial grid.
-
-        Parameters
-        ----------
-        xmin : float
-            left domain edge
-        xmax : float
-            right domain edge
-        Nsamples : int
-            number of point of the uniform grid
-
-        Returns
-        -------
-        shock : namedtuple
-            shock structure in terms of the dimensionless location, velocity,
-            Mach number, density, temperature, radiation temperature.
-        """
-
-        shock = self.calculate_shock_structure()
-        x, v, M, rho, T, theta = shock
-
-        xsamples = np.linspace(xmin, xmax, Nsamples)
-
-        vsamples = np.interp(xsamples, x, v, left=self.M0, right=self.v1)
-        rhosamples = np.interp(xsamples, x, rho, left=1., right=self.rho1)
-        Tsamples = np.interp(xsamples, x, T, left=1., right=self.T1)
-        thetasamples = np.interp(xsamples, x, theta, left=1., right=self.T1)
-        Msamples = vsamples / np.sqrt(Tsamples)
+        p = rho * T / self.gamma
 
         result = collections.namedtuple(
-            'shock', ['x', 'v', 'M', 'rho', 'T', 'theta'])
-        shock = result(x=xsamples, v=vsamples, M=Msamples, rho=rhosamples,
-                       T=Tsamples, theta=thetasamples)
-
+            'shock', ['x', 'v', 'M', 'rho', 'T', 'p', 'theta'])
+        shock = result(x=x, v=v, M=M, rho=rho, T=T, p=p, theta=theta)
         return shock
