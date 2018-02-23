@@ -286,6 +286,22 @@ class noneqdiff_shock_calculator(shock_base):
             numerical parameter for the solution strategy; set the number of
             integration points used in the determination of the precursor and
             relaxation region (default 1024).
+        epsrel : float or None
+            same as eps but for the relaxation branch only; if None, the value
+            for eps is adopted (default None)
+        epsasprel : float or None
+            same as epsasp but for the relaxation branch only; if None, the
+            value for epsasp is adopted (default None)
+        matching_mode : str
+            switch controlling how the relaxation and precursor branch are
+            connected in the presence of a hydrodynamic shock. Currently, one
+            can choose between 'theta_only' (discouraged, mainly for testing
+            purposes), in which the matching is done where the relaxation and
+            precursor theta intercept and 'theta_rhojump'. In the latter case,
+            the difference in theta and the deviation from hydrodynamic jump
+            condition for the density is checked for all combinations of points
+            on the precursor and relaxation branch and the matching happens
+            where both differences are minimal (default 'theta_rhojump')
         """
         super(noneqdiff_shock_calculator, self).__init__(M0, P0, kappa * P0,
                                                          gamma=gamma)
@@ -389,8 +405,8 @@ class noneqdiff_shock_calculator(shock_base):
         precursor_relaxation : namedtuple
             physical state in the precursor or relaxation region in terms of
             the dimensionless location, velocity, Mach number, density,
-            temperature, radiation temperature, derivative of the position
-            with respect to the Mach number.
+            temperature, pressure, radiation temperature, and derivative
+            of the position with respect to the Mach number.
         """
         assert(domain in ["zero", "one"])
 
@@ -585,12 +601,14 @@ class noneqdiff_shock_calculator(shock_base):
         return precursor_relaxation
 
     def _solve_precursor_region(self):
+        """wrapper for the solving the precursor region"""
 
         precursor = self._solve_precursor_relaxation_region(domain="zero")
 
         return precursor
 
     def _solve_relaxation_region(self):
+        """wrapper for the solving the relaxation region"""
 
         relaxation = self._solve_precursor_relaxation_region(domain="one")
 
@@ -607,7 +625,7 @@ class noneqdiff_shock_calculator(shock_base):
         ------
         shock : namedtuple
             shock structure in terms of the dimensionless location, velocity,
-            Mach number, density, temperature, radiation temperature.
+            Mach number, density, temperature, pressure, radiation temperature.
         """
 
         precursor = self._solve_precursor_region()
@@ -732,18 +750,31 @@ class noneqdiff_shock_calculator(shock_base):
     def calculate_shock_structure(self, xmin=None, xmax=None):
         """Calculate the shock structure
 
-        This is one of the main routines which should be used to calculate the
-        shock structure. The spatial gridding follows directly from the M
-        integration and will not be equidistant. Also, the extent of the
-        spatial domain is automatically set by the integration. If instead a
-        uniform gridding is desired, the 'sample_shock' routine should be
-        called.
+        This is the main routines which should be used to calculate the shock
+        structure. The spatial gridding follows directly from the M integration
+        and will not be equidistant. Also, the extent of the spatial domain is
+        automatically set by the integration if xmin and xmax are not set. If
+        instead these parameters are set, the shock profile is either cut
+        according to these values or extended by the zero and one states.
+
+        Parameters
+        ----------
+        xmin : float or None
+            if set, this parameter determines the left boundary of the shock
+            profile. If xmin > x, the spatial grid following from the
+            integration, the profile is cut at xmin. Otherwise, the zero state
+            is inserted (default None).
+        xmax : float or None
+            if set, this parameter determines the right boundary of the shock
+            profile. If xmax < x, the spatial grid following from the
+            integration, the profile is cut at xmax. Otherwise, the one state
+            is appended (default None).
 
         Returns
         -------
         shock : namedtuple
             shock structure in terms of the dimensionless location, velocity,
-            Mach number, density, temperature, radiation temperature.
+            Mach number, density, temperature, pressure, radiation temperature.
         """
 
         shock = self._connect_domains()
