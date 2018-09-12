@@ -238,7 +238,7 @@ class wind_structure_kppa89(wind_structure_base, base_cak_structure_mixin,
                                1. / (1. - self.wind.alpha))))))
         return Z
 
-    def v(self, x):
+    def _v_scalar(self, x):
 
         u = 1. / x
         I = integ.quad(self.Z, u, 1)[0]
@@ -246,4 +246,42 @@ class wind_structure_kppa89(wind_structure_base, base_cak_structure_mixin,
                  (1. - self.star.Gamma) / self.star.R)
         v = np.sqrt(self.wind.alpha / (1. - self.wind.alpha) * vesc2 * I).to(
             "km/s")
+
+        return v.value
+
+    def v(self, x):
+
+        if type(x) is np.ndarray:
+            v = np.array([self._v_scalar(xi) for xi in x])
+        else:
+            v = self._v_scalar(x)
+
+        v = v * units.km / units.s
         return v
+
+
+class wind_structure_fa86(wind_structure_base, base_cak_structure_mixin,
+                          base_velocity_density_mixin):
+    def __init__(self, Mstar=52.5, Lstar=1e6, Teff=4.2e4, alpha=0.6, k=0.5,
+                 Gamma=0, sigma=0.3):
+        super(wind_structure_fa86, self).__init__(Mstar=Mstar, Lstar=Lstar,
+                                                  Teff=Teff, alpha=alpha,
+                                                  k=k, Gamma=Gamma,
+                                                  sigma=sigma)
+
+    @lazyproperty
+    def Mdot(self):
+
+        Mdot = (self.Mdot_cak * 0.5 *
+                (self.star.vesc / (1e3 * units.km / units.s))**(-0.3))
+
+        return Mdot
+
+    @lazyproperty
+    def vterm(self):
+
+        vterm = (self.star.vesc * 2.2 * self.wind.alpha /
+                 (1. - self.wind.alpha) *
+                 (self.star.vesc / (1e3 * units.km / units.s))**0.2)
+
+        return vterm
