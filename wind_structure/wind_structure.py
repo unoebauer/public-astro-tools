@@ -1,5 +1,6 @@
 from __future__ import print_function
 import numpy as np
+import scipy.integrate as integ
 import astropy.units as units
 import astropy.constants as csts
 from astropy.utils.decorators import lazyproperty
@@ -186,3 +187,63 @@ class wind_structure_cak75(wind_structure_base, base_cak_structure_mixin,
     @property
     def vterm(self):
         return self.vterm_cak
+
+
+class wind_structure_kppa89(wind_structure_base, base_cak_structure_mixin,
+                            base_velocity_density_mixin):
+    def __init__(self, Mstar=52.5, Lstar=1e6, Teff=4.2e4, alpha=0.6, k=0.5,
+                 Gamma=0, sigma=0.3, beta=0.8):
+        super(wind_structure_kppa89, self).__init__(Mstar=Mstar, Lstar=Lstar,
+                                                    Teff=Teff, alpha=alpha,
+                                                    k=k, Gamma=Gamma,
+                                                    sigma=sigma)
+
+        self.f1 = 1. / (self.wind.alpha + 1.)
+        self.beta = beta
+
+    @lazyproperty
+    def Mdot(self):
+
+        Mdot = self.f1**(1. / self.wind.alpha) * self.Mdot_cak
+
+        return Mdot
+
+    @lazyproperty
+    def vterm(self):
+
+        vterm = self.vterm_cak * np.sqrt(integ.quad(self.Z, 0, 1)[0])
+
+        return vterm
+
+    def h(self, x):
+
+        return (x - 1.) / self.beta
+
+    def f(self, x):
+
+        return (1. / (self.wind.alpha + 1.) * x**2 / (1. - self.h(x)) *
+                (1. - (1. - 1. / x**2 + self.h(x) / x**2)**(
+                    self.wind.alpha + 1.)))
+
+    def fN(self, x):
+
+        return self.f(x) / self.f1
+
+    def Z(self, u):
+
+        x = 1. / u
+        Z = (self.fN(x)**(1. / (1. - self.wind.alpha)) *
+             (1. + np.sqrt(2. / self.wind.alpha *
+                           (1. - (1. / self.fN(x))**(
+                               1. / (1. - self.wind.alpha))))))
+        return Z
+
+    def v(self, x):
+
+        u = 1. / x
+        I = integ.quad(self.Z, u, 1)[0]
+        vesc2 = (2. * csts.G * self.star.M *
+                 (1. - self.star.Gamma) / self.star.R)
+        v = np.sqrt(self.wind.alpha / (1. - self.wind.alpha) * vesc2 * I).to(
+            "km/s")
+        return v
