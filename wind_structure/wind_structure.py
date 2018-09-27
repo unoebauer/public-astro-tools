@@ -16,41 +16,41 @@ def _test_unit(val, final_unit_string, initial_unit_string):
     return val
 
 
-class star_base(object):
-    def __init__(self, M=52.5, L=1e6, Teff=4.2e4, Gamma=0, sigma=0.3):
+class StarBase(object):
+    def __init__(self, mass=52.5, lum=1e6, teff=4.2e4, gamma=0, sigma=0.3):
 
-        self.M = M
-        self.L = L
-        self.Teff = Teff
+        self.mass = mass
+        self.lum = lum
+        self.teff = teff
         self.sigma = sigma
-        self.Gamma = Gamma
+        self.gamma = gamma
 
     @property
-    def M(self):
-        return self._M
+    def mass(self):
+        return self._mass
 
-    @M.setter
-    def M(self, val):
+    @mass.setter
+    def mass(self, val):
         val = _test_unit(val, "g", "solMass")
-        self._M = val
+        self._mass = val
 
     @property
-    def L(self):
-        return self._L
+    def lum(self):
+        return self._lum
 
-    @L.setter
-    def L(self, val):
+    @lum.setter
+    def lum(self, val):
         val = _test_unit(val, "erg/s", "solLum")
-        self._L = val
+        self._lum = val
 
     @property
-    def Teff(self):
-        return self._Teff
+    def teff(self):
+        return self._teff
 
-    @Teff.setter
-    def Teff(self, val):
+    @teff.setter
+    def teff(self, val):
         val = _test_unit(val, "K", "K")
-        self._Teff = val
+        self._teff = val
 
     @property
     def sigma(self):
@@ -62,55 +62,55 @@ class star_base(object):
         self._sigma = val
 
     @lazyproperty
-    def R(self):
-        R = np.sqrt(self.L /
-                    (4 * np.pi * csts.sigma_sb * self.Teff**4))
-        return R
+    def rad(self):
+        rad = np.sqrt(self.lum /
+                      (4 * np.pi * csts.sigma_sb * self.teff**4))
+        return rad
 
     @lazyproperty
     def vth(self):
-        vth = np.sqrt(2. * self.Teff * csts.k_B / csts.u)
+        vth = np.sqrt(2. * self.teff * csts.k_B / csts.u)
         return vth
 
     @lazyproperty
     def vesc(self):
-        vesc = np.sqrt(2. * csts.G * self.M * (1. - self.Gamma) / self.R)
+        vesc = np.sqrt(2. * csts.G * self.mass * (1. - self.gamma) / self.rad)
         return vesc
 
 
-class wind_base(object):
+class WindBase(object):
     def __init__(self, alpha=0.6, k=0.5):
 
         self.alpha = alpha
         self.k = k
 
 
-class wind_structure_base(object):
-    def __init__(self, Mstar=52.5, Lstar=1e6, Teff=4.2e4, alpha=0.6, k=0.5,
-                 Gamma=0, sigma=0.3):
+class WindStructureBase(object):
+    def __init__(self, mstar=52.5, lstar=1e6, teff=4.2e4, alpha=0.6, k=0.5,
+                 gamma=0, sigma=0.3):
 
-        self.star = star_base(M=Mstar, L=Lstar, Teff=Teff, Gamma=Gamma,
-                              sigma=sigma)
-        self.wind = wind_base(alpha=alpha, k=k)
+        self.star = StarBase(mass=mstar, lum=lstar, teff=teff, gamma=gamma,
+                             sigma=sigma)
+        self.wind = WindBase(alpha=alpha, k=k)
 
     @lazyproperty
     def eta(self):
-        eta = (self.Mdot * self.vterm * csts.c / self.star.L).to("").value
+        eta = (self.mdot * self.vterm * csts.c / self.star.lum).to("").value
         return eta
 
     @lazyproperty
     def t(self):
-        t = (self.Mdot * self.star.sigma * self.star.vth /
-             (2. * np.pi * self.vterm**2 * self.star.R)).to("")
+        t = (self.mdot * self.star.sigma * self.star.vth /
+             (2. * np.pi * self.vterm**2 * self.star.rad)).to("")
         return t
 
     @lazyproperty
-    def M(self):
-        M = self.wind.k * self.t**(-self.wind.alpha)
-        return M
+    def m(self):
+        m = self.wind.k * self.t**(-self.wind.alpha)
+        return m
 
 
-class base_velocity_density_mixin(object):
+class BaseVelocityDensityMixin(object):
     def v(self, x):
         """calculate wind velocity at given location
 
@@ -141,26 +141,26 @@ class base_velocity_density_mixin(object):
             wind density
         """
 
-        r = self.star.R * x
+        r = self.star.rad * x
 
-        return (self.Mdot /
+        return (self.mdot /
                 (4. * np.pi * r**2 * self.v(x))).to("g/cm^3")
 
 
-class base_cak_structure_mixin(object):
+class BaseCakStructureMixin(object):
 
     @lazyproperty
-    def Mdot_cak(self):
+    def mdot_cak(self):
 
-        Mdot_cak = ((4. * np.pi / (self.star.sigma * self.star.vth)) *
+        mdot_cak = ((4. * np.pi / (self.star.sigma * self.star.vth)) *
                     (self.star.sigma / (4. * np.pi))**(1. / self.wind.alpha) *
                     ((1. - self.wind.alpha) / self.wind.alpha)**(
                         (1. - self.wind.alpha) / self.wind.alpha) *
                     (self.wind.alpha * self.wind.k)**(1. / self.wind.alpha) *
-                    (self.star.L / csts.c)**(1. / self.wind.alpha) *
-                    (csts.G * self.star.M * (1. - self.star.Gamma))**(
+                    (self.star.lum / csts.c)**(1. / self.wind.alpha) *
+                    (csts.G * self.star.mass * (1. - self.star.gamma))**(
                         (self.wind.alpha - 1.) / self.wind.alpha))
-        return Mdot_cak.to("Msun/yr")
+        return mdot_cak.to("Msun/yr")
 
     @lazyproperty
     def vterm_cak(self):
@@ -171,42 +171,42 @@ class base_cak_structure_mixin(object):
         return vterm_cak.to("km/s")
 
 
-class wind_structure_cak75(wind_structure_base, base_cak_structure_mixin,
-                           base_velocity_density_mixin):
-    def __init__(self, Mstar=52.5, Lstar=1e6, Teff=4.2e4, alpha=0.6, k=0.5,
-                 Gamma=0, sigma=0.3):
-        super(wind_structure_cak75, self).__init__(Mstar=Mstar, Lstar=Lstar,
-                                                   Teff=Teff, alpha=alpha,
-                                                   k=k, Gamma=Gamma,
-                                                   sigma=sigma)
+class WindStructureCak75(WindStructureBase, BaseCakStructureMixin,
+                         BaseVelocityDensityMixin):
+    def __init__(self, mstar=52.5, lstar=1e6, teff=4.2e4, alpha=0.6, k=0.5,
+                 gamma=0, sigma=0.3):
+        super(WindStructureCak75, self).__init__(mstar=mstar, lstar=lstar,
+                                                 teff=teff, alpha=alpha,
+                                                 k=k, gamma=gamma,
+                                                 sigma=sigma)
 
     @property
-    def Mdot(self):
-        return self.Mdot_cak
+    def mdot(self):
+        return self.mdot_cak
 
     @property
     def vterm(self):
         return self.vterm_cak
 
 
-class wind_structure_kppa89(wind_structure_base, base_cak_structure_mixin,
-                            base_velocity_density_mixin):
-    def __init__(self, Mstar=52.5, Lstar=1e6, Teff=4.2e4, alpha=0.6, k=0.5,
-                 Gamma=0, sigma=0.3, beta=0.8):
-        super(wind_structure_kppa89, self).__init__(Mstar=Mstar, Lstar=Lstar,
-                                                    Teff=Teff, alpha=alpha,
-                                                    k=k, Gamma=Gamma,
-                                                    sigma=sigma)
+class WindStructureKppa89(WindStructureBase, BaseCakStructureMixin,
+                          BaseVelocityDensityMixin):
+    def __init__(self, mstar=52.5, lstar=1e6, teff=4.2e4, alpha=0.6, k=0.5,
+                 gamma=0, sigma=0.3, beta=0.8):
+        super(WindStructureKppa89, self).__init__(mstar=mstar, lstar=lstar,
+                                                  teff=teff, alpha=alpha,
+                                                  k=k, gamma=gamma,
+                                                  sigma=sigma)
 
         self.f1 = 1. / (self.wind.alpha + 1.)
         self.beta = beta
 
     @lazyproperty
-    def Mdot(self):
+    def mdot(self):
 
-        Mdot = self.f1**(1. / self.wind.alpha) * self.Mdot_cak
+        mdot = self.f1**(1. / self.wind.alpha) * self.mdot_cak
 
-        return Mdot
+        return mdot
 
     @lazyproperty
     def vterm(self):
@@ -225,25 +225,25 @@ class wind_structure_kppa89(wind_structure_base, base_cak_structure_mixin,
                 (1. - (1. - 1. / x**2 + self.h(x) / x**2)**(
                     self.wind.alpha + 1.)))
 
-    def fN(self, x):
+    def fn(self, x):
 
         return self.f(x) / self.f1
 
-    def Z(self, u):
+    def z(self, u):
 
         x = 1. / u
-        Z = (self.fN(x)**(1. / (1. - self.wind.alpha)) *
+        z = (self.fn(x)**(1. / (1. - self.wind.alpha)) *
              (1. + np.sqrt(2. / self.wind.alpha *
-                           (1. - (1. / self.fN(x))**(
+                           (1. - (1. / self.fn(x))**(
                                1. / (1. - self.wind.alpha))))))
-        return Z
+        return z
 
     def _v_scalar(self, x):
 
         u = 1. / x
-        I = integ.quad(self.Z, u, 1)[0]
-        vesc2 = (2. * csts.G * self.star.M *
-                 (1. - self.star.Gamma) / self.star.R)
+        I = integ.quad(self.z, u, 1)[0]
+        vesc2 = (2. * csts.G * self.star.m *
+                 (1. - self.star.gamma) / self.star.rad)
         v = np.sqrt(self.wind.alpha / (1. - self.wind.alpha) * vesc2 * I).to(
             "km/s")
 
@@ -260,22 +260,22 @@ class wind_structure_kppa89(wind_structure_base, base_cak_structure_mixin,
         return v
 
 
-class wind_structure_fa86(wind_structure_base, base_cak_structure_mixin,
-                          base_velocity_density_mixin):
-    def __init__(self, Mstar=52.5, Lstar=1e6, Teff=4.2e4, alpha=0.6, k=0.5,
-                 Gamma=0, sigma=0.3):
-        super(wind_structure_fa86, self).__init__(Mstar=Mstar, Lstar=Lstar,
-                                                  Teff=Teff, alpha=alpha,
-                                                  k=k, Gamma=Gamma,
-                                                  sigma=sigma)
+class WindStructureFa86(WindStructureBase, BaseCakStructureMixin,
+                        BaseVelocityDensityMixin):
+    def __init__(self, mstar=52.5, lstar=1e6, teff=4.2e4, alpha=0.6, k=0.5,
+                 gamma=0, sigma=0.3):
+        super(WindStructureFa86, self).__init__(mstar=mstar, lstar=lstar,
+                                                teff=teff, alpha=alpha,
+                                                k=k, gamma=gamma,
+                                                sigma=sigma)
 
     @lazyproperty
-    def Mdot(self):
+    def mdot(self):
 
-        Mdot = (self.Mdot_cak * 0.5 *
+        mdot = (self.mdot_cak * 0.5 *
                 (self.star.vesc / (1e3 * units.km / units.s))**(-0.3))
 
-        return Mdot
+        return mdot
 
     @lazyproperty
     def vterm(self):
