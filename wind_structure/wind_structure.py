@@ -4,19 +4,82 @@ import scipy.integrate as integ
 import astropy.units as units
 import astropy.constants as csts
 from astropy.utils.decorators import lazyproperty
+"""
+Module providing a number of basic calculators to determine the steady-state
+structure of line-driven hot star winds analytically. In particular, the
+predictions according to
+ * Castor, Abbott and Klein 1975
+ * Friend and Abbott 1986
+ * Kudritzki, Pauldrach, Puls and Abbott 1989
+are included. Throughout this module, we rely heavily on the standard text
+book on stellar winds by Lamers and Cassinelli 1999.
+
+Note
+----
+We assume a so-called frozen-in ionization throughout the wind in all the wind
+structure calculators (i.e. delta=0 in terms of the CAK force multipliers).
+
+References
+----------
+ * Castor, Abbott and Klein 1975 (CAK75)
+ * Friend and Abbott 1986 (FA86)
+ * Kudritzki, Pauldrach, Puls and Abbott 1989 (KPPA89)
+ * Lamers and Cassinelli 1999 (LC99)
+
+"""
 
 
 def _test_unit(val, final_unit_string, initial_unit_string):
+    """helper routine to add unit to a quantity and convert to different units
+
+    If val is not yet an astropy.units.quantity, it is assumed that it is
+    given in units specified by the initial_unit_string. The input is then
+    returned after converting to the units given by the final_unit_string.
+
+    Parameters
+    ----------
+    val : float, int, np.ndarray
+        scalar or vector input, can either already be an astropy quantity or
+        not
+    final_unit_string : str
+        string describing the desired final units for the input
+    initial_unit_string : str
+        string describing the assumed initial units of the input
+
+    Returns
+    -------
+    res : astropy.units.quantity
+        input converted to units given by final_unit_string
+    """
     try:
         val.to(final_unit_string)
     except AttributeError:
         val = val * units.Unit(initial_unit_string)
-    val = val.to(final_unit_string)
+    res = val.to(final_unit_string)
 
-    return val
+    return res
 
 
 class StarBase(object):
+    """Base class containing the fundamental properties of the central star
+
+    Parameters
+    ---------
+    mass : float, astropy.units.quantity
+        stellar mass, if dimensionless, it is assumed to be in units of solar
+        masses (default 52.5)
+    lum : float, astropy.units.quantity
+        stellar luminosity, if dimensionless, it is assumed to be in units of
+        solar luminosities (default 1e6)
+    teff : float, astropy.units.quantity
+        effective temperature, if dimensionless, it is assumed to be Kelvin
+        (default 4.2e4)
+    gamma : float
+        Eddington factor due to electron scattering (default 0)
+    sigma : float, astropy.units.quantity
+        reference specific electron scattering cross section, if dimensionless
+        it is assumed to be in units of cm^2/g (default 0.3)
+    """
     def __init__(self, mass=52.5, lum=1e6, teff=4.2e4, gamma=0, sigma=0.3):
 
         self.mass = mass
@@ -63,22 +126,35 @@ class StarBase(object):
 
     @lazyproperty
     def rad(self):
+        """stellar radius"""
         rad = np.sqrt(self.lum /
                       (4 * np.pi * csts.sigma_sb * self.teff**4))
         return rad
 
     @lazyproperty
     def vth(self):
+        """thermal velocity (see LC99, eqs. 8.8, 8.83)"""
         vth = np.sqrt(2. * self.teff * csts.k_B / csts.u)
         return vth
 
     @lazyproperty
     def vesc(self):
+        """escape velocity from stellar surface, accounting for electron
+        scattering (see LC99, eq. 2.39)"""
         vesc = np.sqrt(2. * csts.G * self.mass * (1. - self.gamma) / self.rad)
         return vesc
 
 
 class WindBase(object):
+    """Base class containing the fundamental properties of the wind
+
+    Parameters
+    ----------
+    alpha : float
+        CAK force multiplier parameter, see LC99, eq. 8.86 (default 0.6)
+    k : float
+        CAK force multiplier parameter, see LC99, eq. 8.86 (default 0.5)
+    """
     def __init__(self, alpha=0.6, k=0.5):
 
         self.alpha = alpha
@@ -86,6 +162,28 @@ class WindBase(object):
 
 
 class WindStructureBase(object):
+    """Base class describing the basic structure of a star+wind system
+
+
+
+    Parameters
+    ----------
+    mstar : float, astropy.units.quantity
+        stellar mass, see StarBase for details (default 52.5)
+    lstar : float, astropy.units.quantity
+        stellar luminosity, see StarBase for details (default 1e6)
+    teff : float, astropy.units.quantity
+        effective temperature, see StarBase for details (default 4.2e4)
+    alpha : float
+        force multiplier parameter, see WindBase for details (default, 0.6)
+    k : float
+        force multiplier parameter, see WindBase for details (default, 0.5)
+    gamma : float
+        Eddington factor, see StarBase for details (default 0)
+    sigma : float, astropy.units.quantity
+        reference electron scattering cross section, see StarBase for details
+        (default 0.3)
+    """
     def __init__(self, mstar=52.5, lstar=1e6, teff=4.2e4, alpha=0.6, k=0.5,
                  gamma=0, sigma=0.3):
 
@@ -95,24 +193,32 @@ class WindStructureBase(object):
 
     @lazyproperty
     def eta(self):
+        """wind efficiency (see LC99, eq. 8.20)"""
         eta = (self.mdot * self.vterm * csts.c / self.star.lum).to("").value
         return eta
 
     @lazyproperty
     def t(self):
+        """CAK dimensionless optical depth, c.f. LC99, eq. 8.82 and 8.104"""
         t = (self.mdot * self.star.sigma * self.star.vth /
              (2. * np.pi * self.vterm**2 * self.star.rad)).to("")
         return t
 
     @lazyproperty
     def m(self):
+        """CAK force multiplier, assuming frozen-in ionization, c.f. LC99, eq.
+        8.86 with delta=0"""
         m = self.wind.k * self.t**(-self.wind.alpha)
         return m
 
 
 class BaseVelocityDensityMixin(object):
+    """Mixin class providing routines to calculate the wind velocity and
+    density structure"""
     def v(self, x):
-        """calculate wind velocity at given location
+        """calculate wind velocity according to CAK at given location
+
+        C.f. LC99, eq. 8.104
 
         Parameters
         ----------
@@ -129,6 +235,8 @@ class BaseVelocityDensityMixin(object):
 
     def rho(self, x):
         """calculate wind density at given location
+
+        C.f. LC99, eq. 3.1
 
         Parameters
         ----------
@@ -148,9 +256,11 @@ class BaseVelocityDensityMixin(object):
 
 
 class BaseCakStructureMixin(object):
+    """Mixin class providing the CAK mass loss rate and terminal wind speed"""
 
     @lazyproperty
     def mdot_cak(self):
+        """Mass-loss rate according to CAK75, see LC99, eq. 8.105"""
 
         mdot_cak = ((4. * np.pi / (self.star.sigma * self.star.vth)) *
                     (self.star.sigma / (4. * np.pi))**(1. / self.wind.alpha) *
@@ -164,6 +274,7 @@ class BaseCakStructureMixin(object):
 
     @lazyproperty
     def vterm_cak(self):
+        """Terminal wind speed according to CAK75, see LC99, eq. 8.104"""
 
         vterm_cak = (np.sqrt(self.wind.alpha / (1. - self.wind.alpha)) *
                      self.star.vesc)
